@@ -1,7 +1,8 @@
 'use client';
 
-import { createInvoice, State } from '@/app/lib/actions';
-import { CustomerField } from '@/app/lib/definitions';
+import { useCreateInvoiceMutation, useGetCustomersQuery } from '@/app/store/api/invoiceApi';
+import { useAppDispatch } from '@/app/store/hooks';
+import { addToast } from '@/app/store/slices/uiSlice';
 import { Button } from '@/app/ui/button';
 import {
     CheckIcon,
@@ -10,13 +11,55 @@ import {
     UserCircleIcon,
 } from '@heroicons/react/24/outline';
 import Link from 'next/link';
-import { useActionState } from 'react';
+import { useRouter } from 'next/navigation';
+import { FormEvent, useState } from 'react';
 
-export default function Form({ customers }: { customers: CustomerField[] }) {
-    const initialState: State = { message: null, errors: {} };
-    const [state, formAction] = useActionState(createInvoice, initialState);
+export default function Form() {
+    const router = useRouter();
+    const dispatch = useAppDispatch();
+    const { data: customers = [], isLoading: customersLoading } = useGetCustomersQuery();
+    const [createInvoice, { isLoading: isCreating }] = useCreateInvoiceMutation();
+    const [errors, setErrors] = useState<Record<string, string[]>>({});
+    const [message, setMessage] = useState<string | null>(null);
+
+    const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        setErrors({});
+        setMessage(null);
+
+        const formData = new FormData(e.currentTarget);
+        const customerId = formData.get('customerId') as string;
+        const amount = Number(formData.get('amount'));
+        const status = formData.get('status') as 'pending' | 'paid';
+
+        if (!customerId) {
+            setErrors({ customerId: ['Please select a customer.'] });
+            return;
+        }
+        if (!amount || amount <= 0) {
+            setErrors({ amount: ['Please enter an amount greater than $0.'] });
+            return;
+        }
+        if (!status) {
+            setErrors({ status: ['Please select an invoice status.'] });
+            return;
+        }
+
+        try {
+            await createInvoice({ customerId, amount, status }).unwrap();
+            dispatch(addToast({ message: 'Invoice created successfully.', type: 'success' }));
+            router.push('/dashboard/invoices');
+        } catch (err: unknown) {
+            const error = err as { data?: { details?: Record<string, string[]>; error?: string } };
+            if (error?.data?.details) {
+                setErrors(error.data.details);
+            }
+            setMessage(error?.data?.error || 'Failed to create invoice.');
+        }
+    };
+
     return (
-        <form action={formAction}>
+        <form onSubmit={handleSubmit}>
             <div className="rounded-md bg-gray-50 p-4 md:p-6">
                 {/* Customer Name */}
                 <div className="mb-4">
@@ -29,10 +72,11 @@ export default function Form({ customers }: { customers: CustomerField[] }) {
                             name="customerId"
                             className="peer block w-full cursor-pointer rounded-md border border-gray-200 py-2 pl-10 text-sm outline-2 placeholder:text-gray-500"
                             defaultValue=""
-                            aria-activedescendant='customer-error'
+                            disabled={customersLoading}
+                            aria-describedby='customer-error'
                         >
                             <option value="" disabled>
-                                Select a customer
+                                {customersLoading ? 'Loading...' : 'Select a customer'}
                             </option>
                             {customers.map((customer) => (
                                 <option key={customer.id} value={customer.id}>
@@ -44,8 +88,8 @@ export default function Form({ customers }: { customers: CustomerField[] }) {
                     </div>
                     <div id='customer-error' aria-live='polite' aria-atomic='true'>
                         {
-                            state.errors?.customerId &&
-                            state.errors.customerId.map((error: string) => (
+                            errors?.customerId &&
+                            errors.customerId.map((error: string) => (
                                 <p className='mt-2 text-sm text-red-500' key={error}>
                                     {error}
                                 </p>
@@ -69,14 +113,14 @@ export default function Form({ customers }: { customers: CustomerField[] }) {
                                 placeholder="Enter USD amount"
                                 className="peer block w-full rounded-md border border-gray-200 py-2 pl-10 text-sm outline-2 placeholder:text-gray-500"
                                 required
-                                aria-activedescendant='amount-error'
+                                aria-describedby='amount-error'
                             />
                             <CurrencyDollarIcon className="pointer-events-none absolute left-3 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-gray-500 peer-focus:text-gray-900" />
                         </div>
                         <div id='amount-error' aria-live='polite' aria-atomic='true'>
                             {
-                                state.errors?.amount &&
-                                state.errors.amount.map((error: string) => (
+                                errors?.amount &&
+                                errors.amount.map((error: string) => (
                                     <p className='mt-2 text-sm text-red-500' key={error}>
                                         {error}
                                     </p>
@@ -92,7 +136,7 @@ export default function Form({ customers }: { customers: CustomerField[] }) {
                         Set the invoice status
                     </legend>
                     <div className="rounded-md border border-gray-200 bg-white px-[14px] py-3">
-                        <div className="flex gap-4" aria-activedescendant='invoice-error'>
+                        <div className="flex gap-4" aria-describedby='invoice-error'>
                             <div className="flex items-center" >
                                 <input
                                     id="pending"
@@ -127,8 +171,8 @@ export default function Form({ customers }: { customers: CustomerField[] }) {
                     </div>
                     <div id='invoice-error' aria-live='polite' aria-atomic='true'>
                         {
-                            state.errors?.status &&
-                            state.errors.status.map((error: string) => (
+                            errors?.status &&
+                            errors.status.map((error: string) => (
                                 <p className='mt-2 text-sm text-red-500' key={error}>
                                     {error}
                                 </p>
@@ -137,9 +181,8 @@ export default function Form({ customers }: { customers: CustomerField[] }) {
                     </div>
                     <div id='form-error' aria-live='polite' aria-atomic='true'>
                         {
-                            state.errors &&
-                                state.message
-                                ? <p className='mt-2 text-sm text-red-500'>{state.message}</p>
+                            message
+                                ? <p className='mt-2 text-sm text-red-500'>{message}</p>
                                 : null
                         }
                     </div>
@@ -152,7 +195,9 @@ export default function Form({ customers }: { customers: CustomerField[] }) {
                 >
                     Cancel
                 </Link>
-                <Button type="submit">Create Invoice</Button>
+                <Button type="submit" disabled={isCreating}>
+                    {isCreating ? 'Creating...' : 'Create Invoice'}
+                </Button>
             </div>
         </form>
     );

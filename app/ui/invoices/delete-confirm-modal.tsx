@@ -1,34 +1,31 @@
 'use client';
 
-import { deleteInvoice } from '@/app/lib/actions';
+import { useDeleteInvoiceMutation } from '@/app/store/api/invoiceApi';
 import { useAppDispatch, useAppSelector } from '@/app/store/hooks';
 import { addToast, closeDeleteModal } from '@/app/store/slices/uiSlice';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
-import { useTransition } from 'react';
 
 export default function DeleteConfirmModal() {
   const dispatch = useAppDispatch();
   const { open, invoiceId, invoiceName } = useAppSelector(
     (state) => state.ui.deleteModal,
   );
-  const [isPending, startTransition] = useTransition();
+  const [deleteInvoice, { isLoading: isDeleting }] = useDeleteInvoiceMutation();
 
   if (!open || !invoiceId) return null;
 
-  const handleConfirm = () => {
-    startTransition(async () => {
-      try {
-        await deleteInvoice(invoiceId);
-        dispatch(
-          addToast({ message: 'Invoice deleted successfully.', type: 'success' }),
-        );
-      } catch {
-        dispatch(
-          addToast({ message: 'Failed to delete invoice.', type: 'error' }),
-        );
-      }
-      dispatch(closeDeleteModal());
-    });
+  const handleConfirm = async () => {
+    try {
+      await deleteInvoice(invoiceId).unwrap();
+      dispatch(
+        addToast({ message: 'Invoice deleted successfully.', type: 'success' }),
+      );
+    } catch {
+      dispatch(
+        addToast({ message: 'Failed to delete invoice.', type: 'error' }),
+      );
+    }
+    dispatch(closeDeleteModal());
   };
 
   return (
@@ -50,17 +47,17 @@ export default function DeleteConfirmModal() {
         <div className="flex justify-end gap-3">
           <button
             onClick={() => dispatch(closeDeleteModal())}
-            disabled={isPending}
+            disabled={isDeleting}
             className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             onClick={handleConfirm}
-            disabled={isPending}
+            disabled={isDeleting}
             className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
           >
-            {isPending ? 'Deleting...' : 'Delete'}
+            {isDeleting ? 'Deleting...' : 'Delete'}
           </button>
         </div>
       </div>

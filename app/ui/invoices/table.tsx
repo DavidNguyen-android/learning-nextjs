@@ -1,4 +1,6 @@
-import { fetchFilteredInvoices } from '@/app/lib/data';
+'use client';
+
+import { InvoicesTable as InvoicesTableType } from '@/app/lib/definitions';
 import { formatCurrency, formatDateToLocal } from '@/app/lib/utils';
 import { DeleteInvoice, UpdateInvoice } from '@/app/ui/invoices/buttons';
 import {
@@ -9,14 +11,11 @@ import {
 import InvoiceStatus from '@/app/ui/invoices/status';
 import Image from 'next/image';
 
-export default async function InvoicesTable({
-  query,
-  currentPage,
+export default function InvoicesTable({
+  invoices,
 }: {
-  query: string;
-  currentPage: number;
+  invoices: InvoicesTableType[];
 }) {
-  const invoices = await fetchFilteredInvoices(query, currentPage);
   const invoiceIds = invoices?.map((i) => i.id) ?? [];
 
   return (

@@ -1,7 +1,9 @@
 'use client';
 
-import { State, updateInvoice } from '@/app/lib/actions';
 import { CustomerField, InvoiceForm } from '@/app/lib/definitions';
+import { useUpdateInvoiceMutation } from '@/app/store/api/invoiceApi';
+import { useAppDispatch } from '@/app/store/hooks';
+import { addToast } from '@/app/store/slices/uiSlice';
 import { Button } from '@/app/ui/button';
 import {
     CheckIcon,
@@ -10,7 +12,8 @@ import {
     UserCircleIcon,
 } from '@heroicons/react/24/outline';
 import Link from 'next/link';
-import { useActionState } from 'react';
+import { useRouter } from 'next/navigation';
+import { FormEvent, useState } from 'react';
 
 export default function EditInvoiceForm({
     invoice,
@@ -19,11 +22,49 @@ export default function EditInvoiceForm({
     invoice: InvoiceForm;
     customers: CustomerField[];
 }) {
-    const initialState: State = { message: null, errors: {} };
-    const updateInvoiceWithId = updateInvoice.bind(null, invoice.id);
-    const [state, formAction] = useActionState(updateInvoiceWithId, initialState);
+    const router = useRouter();
+    const dispatch = useAppDispatch();
+    const [updateInvoice, { isLoading: isUpdating }] = useUpdateInvoiceMutation();
+    const [errors, setErrors] = useState<Record<string, string[]>>({});
+    const [message, setMessage] = useState<string | null>(null);
+
+    const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        setErrors({});
+        setMessage(null);
+
+        const formData = new FormData(e.currentTarget);
+        const customerId = formData.get('customerId') as string;
+        const amount = Number(formData.get('amount'));
+        const status = formData.get('status') as 'pending' | 'paid';
+
+        if (!customerId) {
+            setErrors({ customerId: ['Please select a customer.'] });
+            return;
+        }
+        if (!amount || amount <= 0) {
+            setErrors({ amount: ['Please enter an amount greater than $0.'] });
+            return;
+        }
+        if (!status) {
+            setErrors({ status: ['Please select an invoice status.'] });
+            return;
+        }
+
+        try {
+            await updateInvoice({ id: invoice.id, body: { customerId, amount, status } }).unwrap();
+            dispatch(addToast({ message: 'Invoice updated successfully.', type: 'success' }));
+            router.push('/dashboard/invoices');
+        } catch (err: unknown) {
+            const error = err as { data?: { details?: Record<string, string[]>; error?: string } };
+            if (error?.data?.details) {
+                setErrors(error.data.details);
+            }
+            setMessage(error?.data?.error || 'Failed to update invoice.');
+        }
+    };
     return (
-        <form action={formAction}>
+        <form onSubmit={handleSubmit}>
             <div className="rounded-md bg-gray-50 p-4 md:p-6">
                 {/* Customer Name */}
                 <div className="mb-4">
@@ -72,8 +113,8 @@ export default function EditInvoiceForm({
                         </div>
                         <div id='amount-error' aria-live='polite' aria-atomic='true'>
                             {
-                                state.errors?.amount &&
-                                state.errors.amount.map((error: string) => (
+                                errors?.amount &&
+                                errors.amount.map((error: string) => (
                                     <p className='mt-2 text-sm text-red-500' key={error}>
                                         {error}
                                     </p>
@@ -126,9 +167,8 @@ export default function EditInvoiceForm({
                     </div>
                     <div id='form-error' aria-live='polite' aria-atomic='true'>
                         {
-                            state.errors &&
-                                state.message
-                                ? <p className='mt-2 text-sm text-red-500'>{state.message}</p>
+                            message
+                                ? <p className='mt-2 text-sm text-red-500'>{message}</p>
                                 : null
                         }
                     </div>
@@ -141,7 +181,9 @@ export default function EditInvoiceForm({
                 >
                     Cancel
                 </Link>
-                <Button type="submit">Edit Invoice</Button>
+                <Button type="submit" disabled={isUpdating}>
+                    {isUpdating ? 'Saving...' : 'Edit Invoice'}
+                </Button>
             </div>
         </form>
     );
