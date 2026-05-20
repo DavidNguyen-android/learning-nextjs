@@ -1,12 +1,12 @@
 import bcrypt from 'bcrypt';
 import postgres from 'postgres';
-import { invoices, customers, revenue, users } from '../lib/placeholder-data';
+import { customers, invoices, revenue, users } from '../lib/placeholder-data';
 
 const sql = postgres(process.env.POSTGRES_URL!, { ssl: 'require' });
 
-async function seedUsers() {
-  await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
-  await sql`
+async function seedUsers(tx: postgres.Sql) {
+  await tx`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
+  await tx`
     CREATE TABLE IF NOT EXISTS users (
       id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
       name VARCHAR(255) NOT NULL,
@@ -15,50 +15,28 @@ async function seedUsers() {
     );
   `;
 
-  const insertedUsers = await Promise.all(
-    users.map(async (user) => {
-      const hashedPassword = await bcrypt.hash(user.password, 10);
-      return sql`
-        INSERT INTO users (id, name, email, password)
-        VALUES (${user.id}, ${user.name}, ${user.email}, ${hashedPassword})
-        ON CONFLICT (id) DO NOTHING;
-      `;
-    }),
+  const hashedPasswords = await Promise.all(
+    users.map((user) => bcrypt.hash(user.password, 10)),
   );
 
-  return insertedUsers;
-}
+  const values = users.map((user, i) => ({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    password: hashedPasswords[i],
+  }));
 
-async function seedInvoices() {
-  await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS invoices (
-      id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-      customer_id UUID NOT NULL,
-      amount INT NOT NULL,
-      status VARCHAR(255) NOT NULL,
-      date DATE NOT NULL
-    );
+  await tx`
+    INSERT INTO users ${tx(values, 'id', 'name', 'email', 'password')}
+    ON CONFLICT (id) DO NOTHING
   `;
-
-  const insertedInvoices = await Promise.all(
-    invoices.map(
-      (invoice) => sql`
-        INSERT INTO invoices (customer_id, amount, status, date)
-        VALUES (${invoice.customer_id}, ${invoice.amount}, ${invoice.status}, ${invoice.date})
-        ON CONFLICT (id) DO NOTHING;
-      `,
-    ),
-  );
-
-  return insertedInvoices;
 }
 
-async function seedCustomers() {
-  await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
+async function seedCustomers(tx: postgres.Sql) {
+  await tx`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
+  await tx`CREATE EXTENSION IF NOT EXISTS "pg_trgm"`;
 
-  await sql`
+  await tx`
     CREATE TABLE IF NOT EXISTS customers (
       id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
       name VARCHAR(255) NOT NULL,
@@ -67,48 +45,95 @@ async function seedCustomers() {
     );
   `;
 
-  const insertedCustomers = await Promise.all(
-    customers.map(
-      (customer) => sql`
-        INSERT INTO customers (id, name, email, image_url)
-        VALUES (${customer.id}, ${customer.name}, ${customer.email}, ${customer.image_url})
-        ON CONFLICT (id) DO NOTHING;
-      `,
-    ),
-  );
+  const values = customers.map((c) => ({
+    id: c.id,
+    name: c.name,
+    email: c.email,
+    image_url: c.image_url,
+  }));
 
-  return insertedCustomers;
+  await tx`
+    INSERT INTO customers ${tx(values, 'id', 'name', 'email', 'image_url')}
+    ON CONFLICT (id) DO NOTHING
+  `;
+
+  // Indexes for customers
+  await tx`CREATE INDEX IF NOT EXISTS idx_customers_name ON customers (name ASC)`;
+  await tx`CREATE INDEX IF NOT EXISTS idx_customers_name_trgm ON customers USING gin (name gin_trgm_ops)`;
+  await tx`CREATE INDEX IF NOT EXISTS idx_customers_email_trgm ON customers USING gin (email gin_trgm_ops)`;
 }
 
-async function seedRevenue() {
-  await sql`
+async function seedInvoices(tx: postgres.Sql) {
+  await tx`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+      customer_id UUID NOT NULL REFERENCES customers(id),
+      amount INT NOT NULL,
+      status VARCHAR(255) NOT NULL,
+      date DATE NOT NULL
+    );
+  `;
+
+  const values = invoices.map((inv) => ({
+    customer_id: inv.customer_id,
+    amount: inv.amount,
+    status: inv.status,
+    date: inv.date,
+  }));
+
+  await tx`
+    INSERT INTO invoices ${tx(values, 'customer_id', 'amount', 'status', 'date')}
+    ON CONFLICT (id) DO NOTHING
+  `;
+
+  // Indexes for invoices
+  await tx`CREATE INDEX IF NOT EXISTS idx_invoices_customer_id ON invoices (customer_id)`;
+  await tx`CREATE INDEX IF NOT EXISTS idx_invoices_date_desc ON invoices (date DESC)`;
+  await tx`CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices (status)`;
+  await tx`CREATE INDEX IF NOT EXISTS idx_invoices_customer_date ON invoices (customer_id, date DESC)`;
+}
+
+async function seedRevenue(tx: postgres.Sql) {
+  await tx`
     CREATE TABLE IF NOT EXISTS revenue (
       month VARCHAR(4) NOT NULL UNIQUE,
       revenue INT NOT NULL
     );
   `;
 
-  const insertedRevenue = await Promise.all(
-    revenue.map(
-      (rev) => sql`
-        INSERT INTO revenue (month, revenue)
-        VALUES (${rev.month}, ${rev.revenue})
-        ON CONFLICT (month) DO NOTHING;
-      `,
-    ),
-  );
+  const values = revenue.map((rev) => ({
+    month: rev.month,
+    revenue: rev.revenue,
+  }));
 
-  return insertedRevenue;
+  await tx`
+    INSERT INTO revenue ${tx(values, 'month', 'revenue')}
+    ON CONFLICT (month) DO NOTHING
+  `;
 }
 
 export async function GET() {
   try {
-    const result = await sql.begin((sql) => [
-      seedUsers(),
-      seedCustomers(),
-      seedInvoices(),
-      seedRevenue(),
-    ]);
+    // Check if tables already have data
+    const [{ exists }] = await sql`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables WHERE table_name = 'users'
+      )
+    `;
+
+    if (exists) {
+      const [{ count }] = await sql`SELECT COUNT(*) FROM users`;
+      if (Number(count) > 0) {
+        return Response.json({ message: 'Database already seeded.' }, { status: 200 });
+      }
+    }
+
+    await sql.begin(async (tx) => {
+      await seedUsers(tx);
+      await seedCustomers(tx);
+      await seedInvoices(tx);
+      await seedRevenue(tx);
+    });
 
     return Response.json({ message: 'Database seeded successfully' });
   } catch (error) {
